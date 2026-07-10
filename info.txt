@@ -1,0 +1,13 @@
+===================================
+
+API:
+-- Webhook: POST 127.0.0.1:4321/api/webhooks/health-connect
+-- Analytics:
+---- GET 127.0.0.1:4321/api/metrics/steps
+---- GET 127.0.0.1:4321/api/metrics/distance
+---- GET 127.0.0.1:4321/api/metrics/heart_rate
+---- GET 127.0.0.1:4321/api/metrics/exercise
+
+MongoDB: (not exposed; expose in docker-compose.yml)
+
+===================================
