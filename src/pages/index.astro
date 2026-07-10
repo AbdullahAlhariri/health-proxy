@@ -1,0 +1,220 @@
+---
+import { connectDb } from '../lib/db';
+import { SleepSessionModel } from '../models/SleepSession';
+
+const TZ = process.env.TIMEZONE ?? 'Europe/Amsterdam';
+
+let sessions: any[] = [];
+let dbError: string | null = null;
+try {
+  await connectDb();
+  sessions = await SleepSessionModel.find()
+    .sort({ sessionEndTime: -1 })
+    .limit(14)
+    .lean();
+} catch (e: any) {
+  dbError = e?.message ?? 'database unreachable';
+}
+
+const fmtDay = (d: Date) =>
+  new Intl.DateTimeFormat('nl-NL', {
+    timeZone: TZ,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  }).format(d);
+
+const fmtTime = (d: Date) =>
+  new Intl.DateTimeFormat('nl-NL', {
+    timeZone: TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d);
+
+const pretty = (s: number) =>
+  `${Math.floor(s / 3600)}u ${String(Math.round((s % 3600) / 60)).padStart(2, '0')}m`;
+
+// Stages are stored pre-mapped (AWAKE/LIGHT/DEEP/REM/...); bucket defensively.
+const bucket = (stage: string): string => {
+  const s = (stage ?? '').toUpperCase();
+  if (s.includes('DEEP')) return 'deep';
+  if (s.includes('REM')) return 'rem';
+  if (s.includes('AWAKE') || s.includes('OUT_OF_BED')) return 'awake';
+  return 'light';
+};
+---
+
+<html lang="nl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nachtlog — sleep received from HC Webhook</title>
+    <style>
+      :root {
+        --night: #0b1026;
+        --night-soft: #141b3d;
+        --card: #10173399;
+        --ink: #dfe4ff;
+        --ink-dim: #8b93c4;
+        --hairline: #2a3260;
+        --awake: #f2c88f;
+        --light: #5d6db8;
+        --deep: #2b3a8f;
+        --rem: #9a7bd8;
+        --moon: #e8edff;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 500px at 80% -10%, #1a2452 0%, transparent 60%),
+          var(--night);
+        color: var(--ink);
+        font: 16px/1.55 ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+        min-height: 100vh;
+      }
+      main { max-width: 780px; margin: 0 auto; padding: 3.5rem 1.25rem 5rem; }
+      header h1 {
+        font-size: 1.9rem;
+        font-weight: 650;
+        letter-spacing: -0.02em;
+        margin: 0 0 0.25rem;
+        color: var(--moon);
+      }
+      header p { margin: 0; color: var(--ink-dim); font-size: 0.95rem; }
+      .night {
+        margin-top: 1.75rem;
+        padding: 1.1rem 1.25rem 1.25rem;
+        background: var(--card);
+        border: 1px solid var(--hairline);
+        border-radius: 14px;
+      }
+      .night-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+      .night-date { font-weight: 600; color: var(--moon); }
+      .night-span {
+        font-family: ui-monospace, 'Cascadia Code', Menlo, monospace;
+        font-size: 0.95rem;
+        color: var(--ink);
+      }
+      .night-dur { color: var(--ink-dim); font-size: 0.9rem; }
+      /* Signature element: the hypnogram bar — real stage segments to scale */
+      .hypnogram {
+        display: flex;
+        height: 26px;
+        margin-top: 0.8rem;
+        border-radius: 6px;
+        overflow: hidden;
+        background: var(--night-soft);
+      }
+      .seg { height: 100%; }
+      .seg.awake { background: var(--awake); }
+      .seg.light { background: var(--light); }
+      .seg.deep  { background: var(--deep); }
+      .seg.rem   { background: var(--rem); }
+      .legend {
+        display: flex;
+        gap: 1.1rem;
+        margin-top: 0.6rem;
+        font-size: 0.8rem;
+        color: var(--ink-dim);
+        flex-wrap: wrap;
+      }
+      .legend span::before {
+        content: '';
+        display: inline-block;
+        width: 10px; height: 10px;
+        border-radius: 3px;
+        margin-right: 0.4rem;
+        vertical-align: -1px;
+        background: var(--c);
+      }
+      .empty, .error {
+        margin-top: 2.5rem;
+        padding: 1.5rem;
+        border: 1px dashed var(--hairline);
+        border-radius: 14px;
+        color: var(--ink-dim);
+      }
+      .empty code, .error code {
+        color: var(--ink);
+        font-family: ui-monospace, Menlo, monospace;
+        font-size: 0.85em;
+      }
+      footer { margin-top: 3rem; color: var(--ink-dim); font-size: 0.85rem; }
+      footer a { color: var(--ink); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Nachtlog</h1>
+        <p>Sleep sessions received from HC Webhook · times shown in {TZ}</p>
+      </header>
+
+      {dbError && (
+        <div class="error">
+          Database unreachable: <code>{dbError}</code>. Check that the
+          <code>mongo</code> container is running and <code>MONGODB_URI</code> is set.
+        </div>
+      )}
+
+      {!dbError && sessions.length === 0 && (
+        <div class="empty">
+          No sleep sessions yet. Point the HC Webhook app at
+          <code>POST /api/webhooks/health-connect</code> with header
+          <code>X-Webhook-Secret</code>, enable the Sleep data type, and tap
+          “Sync Now”. Sessions appear here after the first delivery.
+        </div>
+      )}
+
+      {sessions.map((s) => {
+        const total = s.durationSeconds || 1;
+        return (
+          <section class="night">
+            <div class="night-head">
+              <span class="night-date">{fmtDay(s.sessionEndTime)}</span>
+              <span class="night-span">
+                {fmtTime(s.sessionStartTime)} → {fmtTime(s.sessionEndTime)}
+              </span>
+              <span class="night-dur">{pretty(s.durationSeconds)}</span>
+            </div>
+            {s.stages?.length > 0 && (
+              <div
+                class="hypnogram"
+                role="img"
+                aria-label={`Sleep stages from ${fmtTime(s.sessionStartTime)} until ${fmtTime(s.sessionEndTime)}`}
+              >
+                {s.stages.map((st: any) => (
+                  <div
+                    class={`seg ${bucket(st.stage)}`}
+                    style={`width:${(st.durationSeconds / total) * 100}%`}
+                    title={`${st.stage} · ${pretty(st.durationSeconds)}`}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })}
+
+      {sessions.length > 0 && (
+        <div class="legend">
+          <span style="--c: var(--deep)">Deep</span>
+          <span style="--c: var(--light)">Light</span>
+          <span style="--c: var(--rem)">REM</span>
+          <span style="--c: var(--awake)">Awake</span>
+        </div>
+      )}
+
+      <footer>
+        Query the API directly: <code>GET /api/sleep?date=yesterday</code>
+      </footer>
+    </main>
+  </body>
+</html>
